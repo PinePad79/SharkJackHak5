@@ -1,0 +1,6 @@
+fortigate_api.token
+*.token
+device.config
+default.cfg
+__pycache__/
+*.py[cod]

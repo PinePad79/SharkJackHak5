@@ -1,0 +1,239 @@
+#!/bin/bash
+# Title: FortiGate Hardening Check (REST API)
+# Author: PinePad79
+# Description: Read-only FortiOS hardening posture scan through the REST API.
+# Version: 1.0
+# Requires: python3 and a read-only FortiOS REST API token.
+
+setup_payload() {
+  PROFILE="default.cfg"
+  LOOT_DIR="/root/loot/fortigate_hardening"
+  # Display payloads may be sourced by the menu framework, so $0 is not a
+  # reliable way to locate files shipped beside the active payload.
+  SCANNER="/root/payload/fortigate_check.py"
+  mkdir -p "$LOOT_DIR"
+  chmod 700 "$LOOT_DIR"
+  LED SETUP
+}
+
+show_banner() {
+  ALERT "■ ■ ■ ■ ■\n  FORTIGATE\n  HARDENING\n■ ■ ■ ■ ■" 2 false true
+}
+
+config_value() {
+  # Some firmware/helper combinations retain duplicate keys. The last entry is
+  # the newest value and prevents a multiline string from becoming a filename.
+  GET_PAYLOAD_CONFIG_OPTION "$1" "$2" "$PROFILE" | tail -n 1
+}
+
+load_config() {
+  FGT_HOST="$(config_value FGT_HOST "192.168.2.99")"
+  FGT_PORT="$(config_value FGT_PORT "44444")"
+  FGT_VDOM="$(config_value FGT_VDOM "root")"
+  FGT_BASELINE="$(config_value FGT_BASELINE "7.4")"
+  VERIFY_TLS="$(config_value VERIFY_TLS "false")"
+  API_TOKEN_FILE="$(config_value API_TOKEN_FILE "/root/fortigate_api.token")"
+  API_TIMEOUT="$(config_value API_TIMEOUT "15")"
+  C2_UPLOAD="$(config_value C2_UPLOAD "true")"
+  C2_UPLOAD_EVIDENCE="$(config_value C2_UPLOAD_EVIDENCE "false")"
+}
+
+save_config() {
+  SET_PAYLOAD_CONFIG_OPTION FGT_HOST "$FGT_HOST" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION FGT_PORT "$FGT_PORT" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION FGT_VDOM "$FGT_VDOM" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION FGT_BASELINE "$FGT_BASELINE" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION VERIFY_TLS "$VERIFY_TLS" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION API_TOKEN_FILE "$API_TOKEN_FILE" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION API_TIMEOUT "$API_TIMEOUT" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION C2_UPLOAD "$C2_UPLOAD" "$PROFILE"
+  SET_PAYLOAD_CONFIG_OPTION C2_UPLOAD_EVIDENCE "$C2_UPLOAD_EVIDENCE" "$PROFILE"
+}
+
+initialize_menu() {
+  ADD_MENU_ITEM "Run Hardening Scan" "run_scan"
+  ADD_MENU_ITEM "Target" "set_target"
+  ADD_MENU_ITEM "Baseline" "set_baseline"
+  ADD_MENU_ITEM "TLS Verification" "set_tls"
+  ADD_MENU_ITEM "Cloud C2 Upload" "set_c2_upload"
+  ADD_MENU_ITEM "Show Settings" "show_settings"
+  ADD_MENU_ITEM "Quit" "EXIT_MENU"
+}
+
+set_target() {
+  local value
+  value="$(IP_PICKER "FortiGate IP" "$FGT_HOST")"
+  [ "$value" = "← Back" ] && return
+  FGT_HOST="$value"
+  save_config
+  ALERT "Target saved" 1 false
+}
+
+set_baseline() {
+  local value
+  value="$(LIST_PICKER "FortiOS baseline" "8.0 7.6 7.4" "$FGT_BASELINE")"
+  [ "$value" = "← Back" ] && return
+  FGT_BASELINE="$value"
+  save_config
+  ALERT "Baseline $FGT_BASELINE" 1 false
+}
+
+set_tls() {
+  local value
+  value="$(OPTION_DIALOG "Verify HTTPS certificate?" "Yes" "No")"
+  case "$value" in
+    Yes) VERIFY_TLS="true" ;;
+    No) VERIFY_TLS="false" ;;
+    *) return ;;
+  esac
+  save_config
+  ALERT "TLS verify: $VERIFY_TLS" 1 false
+}
+
+set_c2_upload() {
+  local value
+  value="$(OPTION_DIALOG "Upload reports to Cloud C2?" "Enable" "Disable")"
+  case "$value" in
+    Enable) C2_UPLOAD="true" ;;
+    Disable) C2_UPLOAD="false" ;;
+    *) return ;;
+  esac
+  SET_PAYLOAD_CONFIG_OPTION C2_UPLOAD "$C2_UPLOAD" "$PROFILE"
+  ALERT "C2 report upload: $C2_UPLOAD" 1 false
+}
+
+show_settings() {
+  ALERT "Host: $FGT_HOST:$FGT_PORT\nVDOM: $FGT_VDOM\nBaseline: $FGT_BASELINE\nTLS verify: $VERIFY_TLS\nC2 report: $C2_UPLOAD\nC2 evidence: $C2_UPLOAD_EVIDENCE" -1 false true
+}
+
+upload_to_c2() {
+  local report="$1" evidence="$2" summary="$3" customer_name="$4"
+
+  [ "$C2_UPLOAD" = "true" ] || {
+    LOG "Cloud C2 upload disabled"
+    return 1
+  }
+  if [ ! -s /etc/device.config ]; then
+    LOG "Cloud C2 config missing; report remains local"
+    return 1
+  fi
+
+  CREATE_SPINNER "Connecting to Cloud C2..."
+  if ! timeout 30 C2CONNECT >/dev/null 2>&1; then
+    STOP_SPINNER
+    LOG "Cloud C2 connection failed; report remains local"
+    return 1
+  fi
+  STOP_SPINNER
+
+  CLOUDLOG "FortiGate hardening scan complete" >/dev/null 2>&1 || true
+  CLOUDLOG "Customer: $customer_name" >/dev/null 2>&1 || true
+  CLOUDLOG "Target: $FGT_HOST" >/dev/null 2>&1 || true
+  CLOUDLOG "Baseline: FortiOS $FGT_BASELINE" >/dev/null 2>&1 || true
+  CLOUDLOG "$summary" >/dev/null 2>&1 || true
+
+  CREATE_SPINNER "Uploading report to C2..."
+  if ! timeout 60 C2EXFIL STRING "$report" "fortigate_hardening_${customer_name}" >/dev/null 2>&1; then
+    STOP_SPINNER
+    LOG "Cloud C2 report upload failed; report remains local"
+    return 1
+  fi
+
+  if [ "$C2_UPLOAD_EVIDENCE" = "true" ]; then
+    timeout 90 C2EXFIL STRING "$evidence" "fortigate_hardening_evidence_${customer_name}" >/dev/null 2>&1 || \
+      LOG "Cloud C2 raw-evidence upload failed"
+  fi
+  STOP_SPINNER
+  LOG "FortiGate hardening report uploaded to Cloud C2"
+  return 0
+}
+
+run_scan() {
+  local stamp report raw rc tls_arg summary customer_name c2_status api_error
+  if ! command -v python3 >/dev/null 2>&1; then
+    ALERT "python3 is required" -1 false true
+    LED FAIL
+    return
+  fi
+  if [ ! -r "$SCANNER" ]; then
+    LOG "Scanner helper missing: $SCANNER"
+    ALERT "Scanner helper missing:\n$SCANNER" -1 false true
+    LED FAIL
+    return
+  fi
+  if [ ! -s "$API_TOKEN_FILE" ]; then
+    ALERT "API token missing:\n$API_TOKEN_FILE" -1 false true
+    LED FAIL
+    return
+  fi
+  if ! echo "$FGT_PORT" | grep -Eq '^[0-9]+$' || [ "$FGT_PORT" -lt 1 ] || [ "$FGT_PORT" -gt 65535 ]; then
+    ALERT "Invalid HTTPS port" 3 false
+    return
+  fi
+
+  WAIT_FOR_LINK
+  NETMODE DHCP_CLIENT
+  WAIT_FOR_IP
+
+  stamp="$(date +%F_%H-%M-%S)"
+  report="$LOOT_DIR/fortigate_${FGT_HOST}_${stamp}_report.txt"
+  raw="$LOOT_DIR/fortigate_${FGT_HOST}_${stamp}_evidence.json"
+  tls_arg="--no-verify-tls"
+  [ "$VERIFY_TLS" = "true" ] && tls_arg="--verify-tls"
+
+  CREATE_SPINNER "REST hardening scan..."
+  python3 "$SCANNER" \
+    --host "$FGT_HOST" \
+    --port "$FGT_PORT" \
+    --vdom "$FGT_VDOM" \
+    --baseline "$FGT_BASELINE" \
+    --token-file "$API_TOKEN_FILE" \
+    --timeout "$API_TIMEOUT" \
+    "$tls_arg" \
+    --report "$report" \
+    --evidence "$raw"
+  rc=$?
+  STOP_SPINNER
+
+  if [ "$rc" -ne 0 ]; then
+    chmod 600 "$report" "$raw" 2>/dev/null
+    LOG "FortiGate API scan failed ($rc)"
+    case "$rc" in
+      3) api_error="REST API login failed: token rejected (HTTP 401)" ;;
+      4) api_error="REST API access denied (HTTP 403): check trusted hosts and permissions" ;;
+      *) api_error="REST API scan failed ($rc): check the loot report" ;;
+    esac
+    ALERT "$api_error" -1 false true
+
+    # Upload the diagnostic report as well, so C2 operators can troubleshoot a
+    # failed assessment without needing physical access to the Shark Jack.
+    customer_name="$(TEXT_PICKER "Customer label" "customer" "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")"
+    [ "$customer_name" = "← Back" ] && customer_name="customer"
+    if upload_to_c2 "$report" "$raw" "$api_error" "$customer_name"; then
+      ALERT "Failure report uploaded to C2" 2 false
+    else
+      ALERT "C2 upload failed\nFailure report saved locally" 3 false
+    fi
+    LED FAIL
+    return
+  fi
+
+  chmod 600 "$report" "$raw"
+  summary="$(sed -n 's/^Summary: //p' "$report" | head -1)"
+  LOG "FortiGate hardening: $summary"
+  customer_name="$(TEXT_PICKER "Customer label" "customer" "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")"
+  [ "$customer_name" = "← Back" ] && customer_name="customer"
+  if upload_to_c2 "$report" "$raw" "$summary" "$customer_name"; then
+    c2_status="C2 upload complete"
+  else
+    c2_status="C2 skipped/failed; local copy saved"
+  fi
+  LED FINISH
+  ALERT "Hardening scan done\n$summary\n$c2_status" -1 false true
+}
+
+setup_payload
+load_config
+initialize_menu
+show_banner
+START_MENU
