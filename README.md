@@ -51,8 +51,8 @@ The token is read from `/root/fortigate_api.token` by default, sent in the `Auth
 Use the display menus to set the IPv4 target, FortiOS baseline, and TLS verification. Advanced options can be placed in the payload's `default.cfg`:
 
 ```ini
-FGT_HOST=192.168.2.99
-FGT_PORT=44444
+FGT_HOST=192.168.1.99
+FGT_PORT=443
 FGT_VDOM=root
 FGT_BASELINE=7.4
 VERIFY_TLS=false

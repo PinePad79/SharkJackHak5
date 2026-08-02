@@ -644,7 +644,7 @@ class Scanner:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", required=True)
-    parser.add_argument("--port", type=int, default=44444)
+    parser.add_argument("--port", type=int, default=443)
     parser.add_argument("--vdom", default="root")
     parser.add_argument("--baseline", choices=tuple(BASELINES), default="7.4")
     parser.add_argument("--token-file", required=True)

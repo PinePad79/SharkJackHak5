@@ -27,8 +27,8 @@ config_value() {
 }
 
 load_config() {
-  FGT_HOST="$(config_value FGT_HOST "192.168.2.99")"
-  FGT_PORT="$(config_value FGT_PORT "44444")"
+  FGT_HOST="$(config_value FGT_HOST "192.168.1.99")"
+  FGT_PORT="$(config_value FGT_PORT "443")"
   FGT_VDOM="$(config_value FGT_VDOM "root")"
   FGT_BASELINE="$(config_value FGT_BASELINE "7.4")"
   VERIFY_TLS="$(config_value VERIFY_TLS "false")"

@@ -18,7 +18,7 @@ def endpoint(data):
 
 class ScannerTests(unittest.TestCase):
     def scanner(self):
-        args = SimpleNamespace(host="192.0.2.1", port=44444, vdom="root", baseline="8.0",
+        args = SimpleNamespace(host="192.0.2.1", port=443, vdom="root", baseline="8.0",
                                timeout=5, verify_tls=False, report="/tmp/report", evidence="/tmp/evidence")
         return MODULE.Scanner(args, "test-token")
 
